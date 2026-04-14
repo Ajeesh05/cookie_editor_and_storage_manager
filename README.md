@@ -108,7 +108,7 @@ The extension requests:
 
 ```text
 manifest.json              Extension metadata, permissions, side panel, and worker registration
-service-worker.js          Background message router and side panel lifecycle hooks
+service-worker.js          Background message router and side panel launcher
 sidepanel.html             Side panel UI shell
 sidepanel.css              Side panel styling
 sidepanel.js               Main side panel state, import/export, sync, and storage actions
@@ -124,6 +124,7 @@ icons/                     Extension icon assets
 ## Implementation Notes
 
 - The service worker accepts typed messages from the side panel and delegates to the cookie or web storage modules.
+- The extension action opens a window-level side panel, so one panel follows the active tab instead of creating separate tab-specific panels.
 - Cookie deletion rebuilds the correct URL from the cookie domain/path and preserves `storeId` and `partitionKey` when present.
 - Cookie edits that change identity fields clean up the replaced cookie to avoid leaving stale entries behind.
 - Web storage operations run inside the active tab using `chrome.scripting.executeScript`.

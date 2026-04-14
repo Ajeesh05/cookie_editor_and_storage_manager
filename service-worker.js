@@ -56,9 +56,9 @@ async function handleMessage(msg) {
 
 
 chrome.action.onClicked.addListener(tab => {
-    if (!tab?.id) return
+    if (tab?.windowId === undefined) return
 
-    chrome.sidePanel.open({ tabId: tab.id })
+    chrome.sidePanel.open({ windowId: tab.windowId })
         .catch(error => {
             console.error("Failed to open side panel:", error)
         })
@@ -70,45 +70,4 @@ chrome.runtime.onInstalled.addListener(details => {
     chrome.tabs.create({
         url: chrome.runtime.getURL("guide.html")
     })
-})
-
-
-async function ensureSidePanelForTab(tabId) {
-    await chrome.sidePanel.setOptions({
-        tabId,
-        enabled: true,
-        path: "sidepanel.html"
-    })
-}
-
-chrome.tabs.onActivated.addListener(async e => {
-    if (!e?.tabId) return
-
-    try {
-        await ensureSidePanelForTab(e.tabId)
-    } catch (error) {
-        console.error("Failed to set side panel options on activation:", error)
-    }
-})
-
-
-chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
-    if (info.status === "complete" && tab.active) {
-        try {
-            await ensureSidePanelForTab(tabId)
-        } catch (error) {
-            console.error("Failed to set side panel options on update:", error)
-        }
-    }
-})
-
-chrome.tabs.onRemoved.addListener(() => {
-    chrome.tabs.query({ active: true, currentWindow: true })
-        .then(tabs => {
-            if (!tabs[0]?.id) return
-            return ensureSidePanelForTab(tabs[0].id)
-        })
-        .catch(error => {
-            console.error("Failed to set side panel options on tab removal:", error)
-        })
 })
