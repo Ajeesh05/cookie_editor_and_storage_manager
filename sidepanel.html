@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Storage Control Center</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+
+<body>
+
+  <nav id="tabs">
+    <button class="active" data-store="cookies">Cookies</button>
+    <button data-store="localStorage">LocalStorage</button>
+    <button data-store="sessionStorage">SessionStorage</button>
+  </nav>
+
+  <section id="toolbar">
+    <div id="searchWrap">
+      <input id="filter" placeholder="Search cookies..." />
+      <button id="refreshIcon" type="button" title="Refresh" aria-label="Refresh">↻</button>
+    </div>
+
+    <div id="toolbarActions">
+      <button id="importBtn" type="button">Import</button>
+      <div id="exportMenuWrap" class="export-menu-wrap">
+        <div class="export-control">
+          <button id="exportBtn" type="button">Export</button>
+          <button id="exportToggle" type="button" aria-label="Export options" aria-haspopup="menu" aria-expanded="false" aria-controls="exportMenu">
+            <span id="exportCaret" class="export-caret">▾</span>
+          </button>
+        </div>
+        <div id="exportMenu" class="export-menu" role="menu" hidden>
+          <p class="export-menu-title">Export includes</p>
+          <label class="export-option">
+            <input id="exportCookies" type="checkbox" checked />
+            Cookies
+          </label>
+          <label class="export-option">
+            <input id="exportLocalStorage" type="checkbox" checked />
+            LocalStorage
+          </label>
+          <label class="export-option">
+            <input id="exportSessionStorage" type="checkbox" checked />
+            SessionStorage
+          </label>
+        </div>
+      </div>
+      <button id="deleteAll" type="button" disabled>Delete All</button>
+    </div>
+
+    <input id="importFile" type="file" accept="application/json" hidden />
+  </section>
+
+
+  <section id="table" class="grid"></section>
+  <button id="createFab" type="button" title="New Item" aria-label="New Item">+</button>
+
+  <div id="confirmOverlay" class="confirm-overlay" hidden>
+    <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <h3 id="confirmTitle">Delete All Items?</h3>
+      <p id="confirmMessage"></p>
+      <div class="confirm-actions">
+        <button id="confirmCancel" type="button">Cancel</button>
+        <button id="confirmDelete" type="button">Delete All</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="alertOverlay" class="confirm-overlay" hidden>
+    <div class="confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="alertTitle">
+      <h3 id="alertTitle">Notice</h3>
+      <p id="alertMessage"></p>
+      <div class="confirm-actions">
+        <button id="alertOk" type="button">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+
+</html>
