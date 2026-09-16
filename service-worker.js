@@ -22,7 +22,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true
 })
 
-async function handleMessage(msg) {
+export async function handleMessage(msg) {
     if (msg.type === 'COOKIES_LIST') {
         return await getCookies(msg.url)
     }

@@ -1,5 +1,23 @@
 import { StorageGrid } from './ui/grid.js'
 import { showContextMenu } from './ui/contextMenu.js'
+import {
+    makeCookieId,
+    buildCookieIdentity,
+    isSameCookieIdentity,
+    buildCookieSetDetails,
+    buildCookieDeleteDetails,
+    getRowPrimaryField,
+    getHostFromUrl,
+    buildStoreSignature,
+    normalizeStorageItems,
+    normalizeCookieItems,
+    makeSnapshotFileName,
+    normalizeExportPreferences,
+    getStorageTypeLabel,
+    summarizeOutcomes,
+    describeFailures,
+    readImportPayload
+} from './lib/cookie-model.js'
 
 const table = document.getElementById("table")
 const refreshIconBtn = document.getElementById("refreshIcon")
@@ -29,7 +47,6 @@ confirmOverlay.hidden = true
 alertOverlay.hidden = true
 exportMenu.hidden = true
 
-const STORAGE_TYPES = ["cookies", "localStorage", "sessionStorage"]
 const LIVE_SYNC_INTERVAL_MS = 1500
 const EXPORT_PREFS_KEY = "exportSelectedTypes"
 
@@ -194,46 +211,6 @@ const grid = new StorageGrid(
     { mode: STORAGE_CONFIG.cookies.mode }
 )
 
-function makeCookieId(cookie) {
-    const identity = buildCookieIdentity(cookie)
-    return [identity.name, identity.domain, identity.path, identity.storeId, identity.partition].join("|")
-}
-
-function normalizeCookieDomainForIdentity(domain) {
-    return String(domain || "").replace(/^\./, "").toLowerCase()
-}
-
-function normalizeCookiePathForIdentity(path) {
-    const value = String(path || "/")
-    return value.startsWith("/") ? value : "/"
-}
-
-function getPartitionKeySignature(partitionKey) {
-    if (!partitionKey || typeof partitionKey !== "object") return ""
-
-    const topLevelSite = partitionKey.topLevelSite ? String(partitionKey.topLevelSite) : ""
-    const hasCrossSiteAncestor = partitionKey.hasCrossSiteAncestor === true ? "1" : "0"
-    return `${topLevelSite}|${hasCrossSiteAncestor}`
-}
-
-function buildCookieIdentity(cookie) {
-    return {
-        name: String(cookie?.name || ""),
-        domain: normalizeCookieDomainForIdentity(cookie?.domain),
-        path: normalizeCookiePathForIdentity(cookie?.path),
-        storeId: String(cookie?.storeId || ""),
-        partition: getPartitionKeySignature(cookie?.partitionKey)
-    }
-}
-
-function isSameCookieIdentity(left, right) {
-    return left.name === right.name &&
-        left.domain === right.domain &&
-        left.path === right.path &&
-        left.storeId === right.storeId &&
-        left.partition === right.partition
-}
-
 async function cleanupReplacedCookie(tab, original, updated) {
     if (!original || !updated) return
 
@@ -267,83 +244,6 @@ async function cleanupReplacedCookie(tab, original, updated) {
     }
 }
 
-function buildCookieUrl(cookie, fallbackUrl) {
-    try {
-        const fallback = new URL(fallbackUrl)
-        const scheme = cookie.secure ? "https:" : "http:"
-        const host = String(cookie.domain || fallback.hostname).replace(/^\./, "") || fallback.hostname
-        const path = cookie.path && cookie.path.startsWith("/") ? cookie.path : "/"
-
-        return `${scheme}//${host}${path}`
-    } catch {
-        return fallbackUrl
-    }
-}
-
-function normalizeSameSite(value) {
-    if (!value) return undefined
-
-    const normalized = String(value).toLowerCase()
-
-    if (normalized === "none" || normalized === "no_restriction") return "no_restriction"
-    if (normalized === "lax") return "lax"
-    if (normalized === "strict") return "strict"
-
-    return undefined
-}
-
-function resolveExpirationDate(payload) {
-    if (payload.maxAge === "" || payload.maxAge === undefined || payload.maxAge === null) {
-        return payload.expirationDate
-    }
-
-    const maxAgeSeconds = Number(payload.maxAge)
-    if (Number.isNaN(maxAgeSeconds)) {
-        return payload.expirationDate
-    }
-
-    return Math.floor(Date.now() / 1000) + maxAgeSeconds
-}
-
-function buildCookieSetDetails(tab, payload) {
-    return {
-        url: tab.url,
-        name: payload.name,
-        value: String(payload.value ?? ""),
-        domain: payload.domain,
-        path: payload.path || "/",
-        secure: Boolean(payload.secure),
-        httpOnly: Boolean(payload.httpOnly),
-        sameSite: normalizeSameSite(payload.sameSite),
-        expirationDate: resolveExpirationDate(payload),
-        storeId: payload.storeId,
-        partitionKey: payload.partitionKey
-    }
-}
-
-function buildCookieDeleteDetails(tab, row) {
-    return {
-        url: buildCookieUrl(row, tab.url),
-        name: row.name,
-        storeId: row.storeId,
-        partitionKey: row.partitionKey
-    }
-}
-
-function getRowPrimaryField(row) {
-    if (row.name !== undefined) return row.name
-    if (row.key !== undefined) return row.key
-    return ""
-}
-
-function getHostFromUrl(url) {
-    try {
-        return new URL(url).hostname.replace(/^www\./, "")
-    } catch {
-        return ""
-    }
-}
-
 function getCurrentStoreConfig() {
     return STORAGE_CONFIG[activeStore]
 }
@@ -368,49 +268,6 @@ function getStoreDisplayName(storeType) {
     if (storeType === "localStorage") return "local storage items"
     if (storeType === "sessionStorage") return "session storage items"
     return "items"
-}
-
-function hashString(input) {
-    let hash = 2166136261
-
-    for (let i = 0; i < input.length; i += 1) {
-        hash ^= input.charCodeAt(i)
-        hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24)
-    }
-
-    return (hash >>> 0).toString(16)
-}
-
-function buildRowToken(storeType, row) {
-    if (storeType === "cookies") {
-        return [
-            makeCookieId(row),
-            String(row.value ?? ""),
-            String(row.expirationDate ?? ""),
-            String(row.sameSite ?? ""),
-            row.secure ? "1" : "0",
-            row.httpOnly ? "1" : "0"
-        ].join("\u001e")
-    }
-
-    return [
-        String(row.key ?? ""),
-        String(row.value ?? "")
-    ].join("\u001e")
-}
-
-function buildStoreSignature(storeType, tab, rows) {
-    const host = getHostFromUrl(tab.url)
-    const tokens = rows.map(row => buildRowToken(storeType, row)).sort()
-    const raw = [
-        String(tab.id),
-        host,
-        storeType,
-        String(tokens.length),
-        tokens.join("\u001f")
-    ].join("\u001d")
-
-    return hashString(raw)
 }
 
 function applyRowsToGrid(tab, rows, signature) {
@@ -503,72 +360,10 @@ function showCustomAlert(message, title = "Notice") {
     })
 }
 
-function normalizeStorageItems(items) {
-    const seen = new Map()
-
-    for (const row of Array.isArray(items) ? items : []) {
-        if (!row || typeof row !== "object") continue
-
-        const key = String(row.key ?? "").trim()
-        if (!key) continue
-
-        seen.set(key, {
-            key,
-            value: String(row.value ?? "")
-        })
-    }
-
-    return Array.from(seen.values())
-}
-
-function normalizeCookieItems(items) {
-    const list = []
-
-    for (const raw of Array.isArray(items) ? items : []) {
-        if (!raw || typeof raw !== "object") continue
-
-        const name = String(raw.name ?? "").trim()
-        if (!name) continue
-
-        const cookie = {
-            name,
-            value: String(raw.value ?? ""),
-            domain: raw.domain ? String(raw.domain) : undefined,
-            path: raw.path ? String(raw.path) : "/",
-            secure: Boolean(raw.secure),
-            httpOnly: Boolean(raw.httpOnly),
-            sameSite: normalizeSameSite(raw.sameSite),
-            expirationDate: Number.isFinite(Number(raw.expirationDate)) ? Number(raw.expirationDate) : undefined,
-            storeId: raw.storeId ? String(raw.storeId) : undefined,
-            partitionKey: raw.partitionKey && typeof raw.partitionKey === "object" ? raw.partitionKey : undefined
-        }
-
-        list.push(cookie)
-    }
-
-    return list
-}
-
-function makeSnapshotFileName(tab) {
-    const host = getHostFromUrl(tab.url) || "site"
-    const date = new Date().toISOString().replace(/[:.]/g, "-")
-    return `storage-control-${host}-${date}.json`
-}
-
 function setExportMenuOpen(isOpen) {
     exportMenu.hidden = !isOpen
     exportToggleBtn.setAttribute("aria-expanded", String(isOpen))
     exportMenuWrap.classList.toggle("open", isOpen)
-}
-
-function normalizeExportPreferences(rawValue) {
-    const source = rawValue && typeof rawValue === "object" ? rawValue : {}
-
-    return {
-        cookies: source.cookies !== undefined ? Boolean(source.cookies) : true,
-        localStorage: source.localStorage !== undefined ? Boolean(source.localStorage) : true,
-        sessionStorage: source.sessionStorage !== undefined ? Boolean(source.sessionStorage) : true
-    }
 }
 
 function applyExportPreferences(prefs) {
@@ -622,131 +417,6 @@ function downloadJson(payload, fileName) {
     URL.revokeObjectURL(url)
 }
 
-function getStorageTypeLabel(type) {
-    if (type === "cookies") return "cookies"
-    if (type === "localStorage") return "local storage"
-    if (type === "sessionStorage") return "session storage"
-    return type
-}
-
-function isStorageType(value) {
-    return STORAGE_TYPES.includes(value)
-}
-
-function parseSelectedTypes(rawSelectedTypes) {
-    if (rawSelectedTypes === undefined) return null
-    if (!Array.isArray(rawSelectedTypes)) {
-        throw new Error("Import file has invalid selectedTypes metadata")
-    }
-
-    const selected = []
-
-    for (const rawType of rawSelectedTypes) {
-        const type = String(rawType)
-
-        if (!isStorageType(type)) {
-            throw new Error(`Import file has unsupported storage type "${type}"`)
-        }
-
-        if (!selected.includes(type)) {
-            selected.push(type)
-        }
-    }
-
-    if (selected.length === 0) {
-        throw new Error("Import file selected no storage types")
-    }
-
-    return selected
-}
-
-function assertImportArray(source, type) {
-    if (!(type in source)) {
-        throw new Error(`Import file is missing ${getStorageTypeLabel(type)} data`)
-    }
-
-    const value = source[type]
-    if (!Array.isArray(value)) {
-        throw new Error(`Import file has invalid ${getStorageTypeLabel(type)} format`)
-    }
-
-    return value
-}
-
-function validateStorageImportItems(items, type) {
-    items.forEach((item, index) => {
-        if (!item || typeof item !== "object") {
-            throw new Error(`Invalid ${getStorageTypeLabel(type)} entry at index ${index}`)
-        }
-
-        const key = String(item.key ?? "").trim()
-        if (!key) {
-            throw new Error(`Missing key in ${getStorageTypeLabel(type)} entry at index ${index}`)
-        }
-    })
-}
-
-function validateCookieImportItems(items) {
-    items.forEach((item, index) => {
-        if (!item || typeof item !== "object") {
-            throw new Error(`Invalid cookie entry at index ${index}`)
-        }
-
-        const name = String(item.name ?? "").trim()
-        if (!name) {
-            throw new Error(`Missing name in cookie entry at index ${index}`)
-        }
-    })
-}
-
-function readImportPayload(text) {
-    let parsed
-
-    try {
-        parsed = JSON.parse(text)
-    } catch {
-        throw new Error("Invalid JSON file")
-    }
-
-    const source = parsed && typeof parsed === "object" && parsed.payload && typeof parsed.payload === "object"
-        ? parsed.payload
-        : parsed
-
-    if (!source || typeof source !== "object") {
-        throw new Error("Unsupported import format")
-    }
-
-    const selectedFromMetadata = parseSelectedTypes(source.selectedTypes ?? parsed.selectedTypes)
-    const includedTypes = selectedFromMetadata || STORAGE_TYPES.filter(type => type in source)
-
-    if (includedTypes.length === 0) {
-        throw new Error("Import file does not contain cookies, localStorage, or sessionStorage data")
-    }
-
-    const rawByType = {}
-
-    for (const type of includedTypes) {
-        rawByType[type] = assertImportArray(source, type)
-    }
-
-    if (includedTypes.includes("cookies")) {
-        validateCookieImportItems(rawByType.cookies)
-    }
-    if (includedTypes.includes("localStorage")) {
-        validateStorageImportItems(rawByType.localStorage, "localStorage")
-    }
-    if (includedTypes.includes("sessionStorage")) {
-        validateStorageImportItems(rawByType.sessionStorage, "sessionStorage")
-    }
-
-    return {
-        includedTypes,
-        cookies: includedTypes.includes("cookies") ? normalizeCookieItems(rawByType.cookies) : [],
-        localStorage: includedTypes.includes("localStorage") ? normalizeStorageItems(rawByType.localStorage) : [],
-        sessionStorage: includedTypes.includes("sessionStorage") ? normalizeStorageItems(rawByType.sessionStorage) : []
-    }
-}
-
 async function exportAllStoresForTab(tab, selectedTypes) {
     const payload = {
         version: 1,
@@ -791,25 +461,6 @@ async function exportAllStoresForTab(tab, selectedTypes) {
 
     await Promise.all(tasks)
     return payload
-}
-
-function summarizeOutcomes(outcomes) {
-    const applied = outcomes.filter(outcome => outcome.ok).length
-    const failed = outcomes
-        .filter(outcome => !outcome.ok)
-        .map(({ label, error }) => ({ label, error }))
-
-    return { applied, failed }
-}
-
-function describeFailures(failed, limit = 3) {
-    const reasons = failed
-        .slice(0, limit)
-        .map(item => `${item.label || "(unnamed)"}: ${item.error}`)
-        .join("; ")
-    const more = failed.length > limit ? ` (+${failed.length - limit} more)` : ""
-
-    return `${reasons}${more}`
 }
 
 async function applyCookies(tab, cookies) {
