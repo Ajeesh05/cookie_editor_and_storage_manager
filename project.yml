@@ -1,0 +1,40 @@
+name: cookie-editor-and-storage-manager
+type: chrome-extension
+
+# audit   - propose findings only, never write code
+# propose - may implement, always via a PR you review
+# full    - may implement and auto-merge on green CI
+#
+# propose, not full: this extension holds <all_urls> and the cookies
+# permission, so it can read every session cookie on the web. The blast radius
+# of a bad change is not comparable to a popup that opens a window.
+autonomy: propose
+
+source:
+  root: .
+
+store:
+  publisher_id: null   # awaiting D1
+  item_id: null        # awaiting D1
+
+permissions:
+  # The safety gate compares every PR against this list. Any growth halts the
+  # pipeline until you comment /approve-permissions.
+  baseline:
+    - cookies
+    - storage
+    - sidePanel
+    - tabs
+    - scripting
+  host_baseline:
+    - "<all_urls>"
+
+test:
+  unit: true
+  e2e: true
+
+versioning:
+  strategy: semver
+
+retry:
+  max_dispatches: 2
