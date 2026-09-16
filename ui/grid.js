@@ -57,16 +57,97 @@ export class StorageGrid {
     }
 
     setData(data, host) {
+        const expandSnapshot = this.captureExpandState()
+
         this.currentHost = host || this.currentHost
         this.allData = data.slice()
         this.data = data.slice()
+
+        expandSnapshot
+            .filter(entry => entry.isNew)
+            .forEach(entry => this.data.unshift(entry.template))
+
         this.draw()
+        this.restoreExpandState(expandSnapshot)
+    }
+
+    makeTempId() {
+        this._tempIdSeq = (this._tempIdSeq || 0) + 1
+        return `tmp-${this._tempIdSeq}`
+    }
+
+    getRowIdentity(rowData) {
+        if (!rowData) return null
+        if (rowData.__new) return rowData.__tempId
+        return rowData[this.schema.keyField]
+    }
+
+    // Snapshots any currently-expanded rows (including their in-progress,
+    // unsaved field values) so a data reload doesn't silently discard them.
+    captureExpandState() {
+        const snapshot = []
+
+        Array.from(this.container.querySelectorAll(".grid-row")).forEach(row => {
+            const expand = row.nextSibling
+            if (!expand || !expand.classList?.contains("grid-expand")) return
+
+            const rowData = row._rowData
+            if (!rowData) return
+
+            const fields = {}
+            expand.querySelectorAll("[data-field]").forEach(el => {
+                fields[el.dataset.field] = el.type === "checkbox" ? el.checked : el.value
+            })
+
+            snapshot.push({
+                identity: this.getRowIdentity(rowData),
+                isNew: rowData.__new === true,
+                template: rowData.__new === true ? rowData : null,
+                fields
+            })
+        })
+
+        return snapshot
+    }
+
+    restoreExpandState(snapshot) {
+        if (!snapshot || snapshot.length === 0) return
+
+        snapshot.forEach(entry => {
+            const row = Array.from(this.container.querySelectorAll(".grid-row"))
+                .find(candidate => this.getRowIdentity(candidate._rowData) === entry.identity)
+
+            const toggleCell = row?.querySelector(".grid-cell")
+            if (!row || !toggleCell) return
+
+            this.toggleExpand(row, row._rowData, toggleCell)
+
+            const expand = row.nextSibling
+            if (!expand?.classList?.contains("grid-expand")) return
+
+            Object.entries(entry.fields).forEach(([field, value]) => {
+                const el = expand.querySelector(`[data-field="${field}"]`)
+                if (!el) return
+
+                if (el.type === "checkbox") {
+                    el.checked = Boolean(value)
+                } else {
+                    el.value = value
+                }
+            })
+
+            // Re-trigger field listeners (prefix-rule locks, size display) so
+            // restored values reflect the same derived UI state as live typing.
+            expand.querySelector('[data-field="name"]')?.dispatchEvent(new Event("input"))
+            expand.querySelector('[data-field="value"]')?.dispatchEvent(new Event("input"))
+        })
     }
 
     createNewRow() {
         const blank = this.mode === "cookies"
             ? {
                 __new: true,
+                __tempId: this.makeTempId(),
                 name: "",
                 value: "",
                 path: "/",
@@ -77,6 +158,7 @@ export class StorageGrid {
             }
             : {
                 __new: true,
+                __tempId: this.makeTempId(),
                 key: "",
                 value: ""
             }
@@ -113,6 +195,7 @@ export class StorageGrid {
     renderRow(rowData) {
         const row = document.createElement("div")
         row.className = "grid-row"
+        row._rowData = rowData
 
         row.oncontextmenu = e => {
             e.preventDefault()
@@ -482,6 +565,12 @@ export class StorageGrid {
                 return
             }
 
+            // Close this row's own panel before the reload so the upcoming
+            // grid refresh doesn't treat it as still open (other expanded
+            // rows are preserved separately via captureExpandState).
+            expand.remove()
+            toggleCell.textContent = ">"
+
             if (isNew) {
                 await this.handlers.onCreate(payload)
                 return
@@ -574,6 +663,12 @@ export class StorageGrid {
                 return
             }
 
+            // Close this row's own panel before the reload so the upcoming
+            // grid refresh doesn't treat it as still open (other expanded
+            // rows are preserved separately via captureExpandState).
+            expand.remove()
+            toggleCell.textContent = ">"
+
             if (isNew) {
                 await this.handlers.onCreate({
                     key: updated.key,
@@ -652,22 +747,23 @@ export class StorageGrid {
 
     filter(query) {
         const q = (query || "").toLowerCase()
+        const expandSnapshot = this.captureExpandState()
 
-        if (!q) {
-            this.data = this.allData.slice()
-            this.draw()
-            return
-        }
+        this.data = !q
+            ? this.allData.slice()
+            : this.allData.filter(row =>
+                this.schema.columns.some(col => {
+                    if (col.id === "actions" || col.id === "expand") return false
+                    const val = String(row[col.id] || "").toLowerCase()
+                    return val.includes(q)
+                })
+            )
 
-        const filtered = this.allData.filter(row =>
-            this.schema.columns.some(col => {
-                if (col.id === "actions" || col.id === "expand") return false
-                const val = String(row[col.id] || "").toLowerCase()
-                return val.includes(q)
-            })
-        )
+        expandSnapshot
+            .filter(entry => entry.isNew)
+            .forEach(entry => this.data.unshift(entry.template))
 
-        this.data = filtered
         this.draw()
+        this.restoreExpandState(expandSnapshot)
     }
 }

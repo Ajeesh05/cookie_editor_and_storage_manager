@@ -161,14 +161,19 @@ const STORAGE_CONFIG = {
         },
 
         bulkRemove: async (tab, rows) => {
-            for (const row of rows) {
-                await sendBackgroundMessage({
-                    type: "COOKIE_DELETE",
-                    details: buildCookieDeleteDetails(tab, row)
-                })
-            }
+            const outcomes = await Promise.all(rows.map(async row => {
+                try {
+                    await sendBackgroundMessage({
+                        type: "COOKIE_DELETE",
+                        details: buildCookieDeleteDetails(tab, row)
+                    })
+                    return { ok: true }
+                } catch (error) {
+                    return { ok: false, label: row.name, error: error?.message || String(error) }
+                }
+            }))
 
-            return { ok: true }
+            return summarizeOutcomes(outcomes)
         }
     },
     localStorage: buildWebStorageConfig("localStorage", "LocalStorage"),
@@ -190,15 +195,8 @@ const grid = new StorageGrid(
 )
 
 function makeCookieId(cookie) {
-    const partition = cookie.partitionKey ? JSON.stringify(cookie.partitionKey) : ""
-
-    return [
-        cookie.name || "",
-        cookie.domain || "",
-        cookie.path || "",
-        cookie.storeId || "",
-        partition
-    ].join("|")
+    const identity = buildCookieIdentity(cookie)
+    return [identity.name, identity.domain, identity.path, identity.storeId, identity.partition].join("|")
 }
 
 function normalizeCookieDomainForIdentity(domain) {
@@ -432,7 +430,12 @@ function shouldPauseLiveSync() {
     if (document.hidden) return true
     if (table.querySelector(".grid-expand")) return true
 
-    const activeTag = document.activeElement?.tagName
+    // Only pause for focus inside the grid itself (e.g. an expand-row field).
+    // Focus in the toolbar (search box, export checkboxes) shouldn't block sync.
+    const activeElement = document.activeElement
+    if (!activeElement || !table.contains(activeElement)) return false
+
+    const activeTag = activeElement.tagName
     return activeTag === "INPUT" || activeTag === "TEXTAREA" || activeTag === "SELECT"
 }
 
@@ -790,45 +793,103 @@ async function exportAllStoresForTab(tab, selectedTypes) {
     return payload
 }
 
+function summarizeOutcomes(outcomes) {
+    const applied = outcomes.filter(outcome => outcome.ok).length
+    const failed = outcomes
+        .filter(outcome => !outcome.ok)
+        .map(({ label, error }) => ({ label, error }))
+
+    return { applied, failed }
+}
+
+function describeFailures(failed, limit = 3) {
+    const reasons = failed
+        .slice(0, limit)
+        .map(item => `${item.label || "(unnamed)"}: ${item.error}`)
+        .join("; ")
+    const more = failed.length > limit ? ` (+${failed.length - limit} more)` : ""
+
+    return `${reasons}${more}`
+}
+
 async function applyCookies(tab, cookies) {
-    for (const cookie of cookies) {
-        await sendBackgroundMessage({
-            type: "COOKIE_SET",
-            details: buildCookieSetDetails(tab, cookie)
-        })
-    }
+    const outcomes = await Promise.all(cookies.map(async cookie => {
+        try {
+            await sendBackgroundMessage({
+                type: "COOKIE_SET",
+                details: buildCookieSetDetails(tab, cookie)
+            })
+            return { ok: true }
+        } catch (error) {
+            return { ok: false, label: cookie.name, error: error?.message || String(error) }
+        }
+    }))
+
+    return summarizeOutcomes(outcomes)
 }
 
 async function applyWebStorageItems(tab, area, items) {
-    for (const item of items) {
-        await sendBackgroundMessage({
-            type: "WEB_STORAGE_SET",
-            tabId: tab.id,
-            details: {
-                area,
-                key: item.key,
-                value: item.value
-            }
-        })
-    }
+    const outcomes = await Promise.all(items.map(async item => {
+        try {
+            await sendBackgroundMessage({
+                type: "WEB_STORAGE_SET",
+                tabId: tab.id,
+                details: {
+                    area,
+                    key: item.key,
+                    value: item.value
+                }
+            })
+            return { ok: true }
+        } catch (error) {
+            return { ok: false, label: item.key, error: error?.message || String(error) }
+        }
+    }))
+
+    return summarizeOutcomes(outcomes)
 }
 
 async function importAllStoresToTab(tab, payload) {
+    const summary = {}
+
     for (const type of payload.includedTypes) {
         if (type === "cookies") {
-            await applyCookies(tab, payload.cookies)
+            summary.cookies = await applyCookies(tab, payload.cookies)
             continue
         }
 
         if (type === "localStorage") {
-            await applyWebStorageItems(tab, "localStorage", payload.localStorage)
+            summary.localStorage = await applyWebStorageItems(tab, "localStorage", payload.localStorage)
             continue
         }
 
         if (type === "sessionStorage") {
-            await applyWebStorageItems(tab, "sessionStorage", payload.sessionStorage)
+            summary.sessionStorage = await applyWebStorageItems(tab, "sessionStorage", payload.sessionStorage)
         }
     }
+
+    return summary
+}
+
+function buildImportSummaryMessage(summary) {
+    const lines = []
+    let totalFailed = 0
+
+    for (const [type, result] of Object.entries(summary)) {
+        if (!result) continue
+
+        const label = getStorageTypeLabel(type)
+
+        if (result.failed.length === 0) {
+            lines.push(`${label}: imported ${result.applied}.`)
+            continue
+        }
+
+        totalFailed += result.failed.length
+        lines.push(`${label}: imported ${result.applied}, failed ${result.failed.length} (${describeFailures(result.failed)}).`)
+    }
+
+    return totalFailed > 0 ? lines.join("\n") : null
 }
 
 async function sendBackgroundMessage(message) {
@@ -1038,8 +1099,15 @@ deleteAllBtn.onclick = () => {
         if (!confirmed) return
 
         const tab = await getActiveTab()
-        await getCurrentStoreConfig().bulkRemove(tab, rows)
+        const result = await getCurrentStoreConfig().bulkRemove(tab, rows)
         await loadActiveStore()
+
+        if (result?.failed?.length) {
+            await showCustomAlert(
+                `Deleted ${result.applied} ${label}. Failed to delete ${result.failed.length} (${describeFailures(result.failed)}).`,
+                "Delete Incomplete"
+            )
+        }
     })
 }
 
@@ -1057,8 +1125,13 @@ importFileInput.onchange = () => {
         const payload = readImportPayload(text)
 
         const tab = await getActiveTab()
-        await importAllStoresToTab(tab, payload)
+        const summary = await importAllStoresToTab(tab, payload)
         await loadActiveStore()
+
+        const message = buildImportSummaryMessage(summary)
+        if (message) {
+            await showCustomAlert(message, "Import Completed With Errors")
+        }
     })
 }
 
